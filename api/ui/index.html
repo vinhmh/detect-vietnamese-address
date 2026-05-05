@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vietnamese Address Resolver</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --border:   #2a2d3a;
+      --accent:   #4f7cff;
+      --accent-l: #7b9fff;
+      --success:  #22c55e;
+      --warning:  #f59e0b;
+      --danger:   #ef4444;
+      --fg:       #e2e4f0;
+      --fg2:      #8a8fa8;
+      --fg3:      #555870;
+      --radius:   8px;
+      --mono:     'JetBrains Mono', 'Fira Code', monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+    header .badge {
+      font-size: 11px;
+      background: var(--border);
+      color: var(--fg2);
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+    header .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--fg3); margin-left: auto;
+      transition: background 0.3s;
+    }
+    header .status-dot.ok  { background: var(--success); }
+    header .status-dot.err { background: var(--danger); }
+    header .status-label { font-size: 12px; color: var(--fg2); }
+
+    main {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 32px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* ── Input ── */
+    .input-block { display: flex; flex-direction: column; gap: 8px; }
+    .input-block label { font-size: 12px; color: var(--fg2); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+    .input-row { display: flex; gap: 8px; }
+    textarea {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--fg);
+      font-size: 15px;
+      padding: 12px 14px;
+      resize: vertical;
+      min-height: 56px;
+      font-family: inherit;
+      transition: border-color 0.15s;
+      outline: none;
+    }
+    textarea:focus { border-color: var(--accent); }
+    button.primary {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      padding: 0 20px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      white-space: nowrap;
+      align-self: flex-start;
+      height: 56px;
+    }
+    button.primary:hover { opacity: 0.88; }
+    button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Examples ── */
+    .examples { display: flex; flex-wrap: wrap; gap: 6px; }
+    .examples span { font-size: 12px; color: var(--fg2); align-self: center; }
+    .chip {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 3px 10px;
+      font-size: 12px;
+      color: var(--fg2);
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .chip:hover { border-color: var(--accent); color: var(--accent-l); }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: none;
+      width: 18px; height: 18px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      margin: 0 auto;
+    }
+    .spinner.active { display: block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Result area ── */
+    #results { display: flex; flex-direction: column; gap: 16px; }
+
+    /* ── Confidence bar ── */
+    .conf-row { display: flex; align-items: center; gap: 12px; }
+    .conf-label { font-size: 12px; color: var(--fg2); min-width: 80px; }
+    .conf-bar-wrap {
+      flex: 1;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .conf-bar {
+      height: 100%;
+      border-radius: 3px;
+      background: var(--success);
+      transition: width 0.4s ease;
+    }
+    .conf-bar.med { background: var(--warning); }
+    .conf-bar.low { background: var(--danger); }
+    .conf-pct { font-size: 13px; font-weight: 600; min-width: 36px; text-align: right; }
+
+    .action-pill {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 10px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .action-pill.auto_accept { background: rgba(34,197,94,0.15); color: var(--success); }
+    .action-pill.review      { background: rgba(245,158,11,0.15); color: var(--warning); }
+    .action-pill.low_confidence { background: rgba(239,68,68,0.15); color: var(--danger); }
+
+    /* ── Top result card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .card-header {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--fg2);
+    }
+    .card-body { padding: 14px; }
+
+    .addr-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .addr-grid.with-street {
+      grid-template-columns: repeat(5, 1fr);
+    }
+    .addr-cell { display: flex; flex-direction: column; gap: 2px; }
+    .addr-cell .cell-label { font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.04em; }
+    .addr-cell .cell-value { font-size: 15px; font-weight: 600; color: var(--fg); }
+    .addr-cell .cell-sub   { font-size: 11px; color: var(--fg2); }
+    .addr-cell .cell-score { font-size: 11px; color: var(--accent-l); }
+
+    /* ── Candidates table ── */
+    .cand-table { width: 100%; border-collapse: collapse; }
+    .cand-table th {
+      text-align: left;
+      font-size: 11px;
+      color: var(--fg3);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .cand-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      vertical-align: top;
+    }
+    .cand-table tr:last-child td { border-bottom: none; }
+    .cand-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .cand-table .rank { color: var(--fg3); font-size: 12px; font-family: var(--mono); }
+    .cand-table .score-val { font-family: var(--mono); font-size: 12px; color: var(--accent-l); }
+    .reasons { display: flex; flex-wrap: wrap; gap: 4px; }
+    .reason-tag {
+      font-size: 10px;
+      background: rgba(79,124,255,0.1);
+      color: var(--accent-l);
+      border-radius: 4px;
+      padding: 1px 6px;
+    }
+
+    /* ── Debug section ── */
+    details { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    summary {
+      padding: 10px 14px;
+      font-size: 12px;
+      color: var(--fg2);
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::before { content: '▶'; font-size: 10px; transition: transform 0.2s; }
+    details[open] summary::before { transform: rotate(90deg); }
+    pre {
+      background: var(--bg);
+      padding: 14px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.6;
+      overflow-x: auto;
+      color: var(--fg2);
+      border-top: 1px solid var(--border);
+    }
+
+    .norm-row {
+      font-size: 12px;
+      color: var(--fg2);
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .norm-row .arrow { color: var(--fg3); }
+    .norm-val { color: var(--fg); font-family: var(--mono); }
+
+    .empty-state {
+      text-align: center;
+      padding: 48px 0;
+      color: var(--fg3);
+      font-size: 13px;
+    }
+    .error-msg {
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      color: #fca5a5;
+      font-size: 13px;
+    }
+
+    /* ── Era badge ── */
+    .era-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .era-badge.post_merger {
+      background: rgba(79,124,255,0.15);
+      color: #7b9fff;
+      border: 1px solid rgba(79,124,255,0.3);
+    }
+    .era-badge.pre_merger {
+      background: rgba(245,158,11,0.12);
+      color: #f59e0b;
+      border: 1px solid rgba(245,158,11,0.3);
+    }
+    .era-badge::before {
+      content: '';
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    /* ── Date selector row ── */
+    .date-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--fg2);
+    }
+    .date-row input[type="date"] {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--fg);
+      font-size: 13px;
+      padding: 5px 10px;
+      outline: none;
+      cursor: pointer;
+    }
+    .date-row input[type="date"]:focus { border-color: var(--accent); }
+    .date-row .date-hint { color: var(--fg3); font-size: 11px; }
+    .date-reset {
+      background: none;
+      border: none;
+      color: var(--fg3);
+      font-size: 12px;
+      cursor: pointer;
+      padding: 0;
+      text-decoration: underline;
+    }
+    .date-reset:hover { color: var(--fg2); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Vietnamese Address Resolver</h1>
+  <span class="badge">pg_trgm</span>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+    <span class="status-label" id="statusLabel">checking...</span>
+    <div class="status-dot" id="statusDot"></div>
+  </div>
+</header>
+
+<main>
+
+  <!-- Input -->
+  <div class="input-block">
+    <label>Enter raw address</label>
+    <div class="input-row">
+      <textarea id="addrInput" rows="2"
+        placeholder="e.g.  22 bờ báo btaan thang p son ky q tần phú tphcm"></textarea>
+      <button class="primary" id="resolveBtn" onclick="doResolve()">Resolve</button>
+    </div>
+    <!-- Date selector for time-travel (pre/post merger) -->
+    <div class="date-row">
+      <span>Resolve as of:</span>
+      <input type="date" id="asOfDate" title="Leave blank for today (post-merger)" />
+      <button class="date-reset" onclick="clearDate()" title="Reset to today">today</button>
+      <span class="date-hint" id="eraHint">— post-merger structure (34 provinces)</span>
+    </div>
+  </div>
+
+  <!-- Examples -->
+  <div class="examples">
+    <span>Try (post-2025):</span>
+    <span class="chip" onclick="setExample(this)">ha noi</span>
+    <span class="chip" onclick="setExample(this)">hcm</span>
+    <span class="chip" onclick="setExample(this)">Da Nang</span>
+    <span class="chip" onclick="setExample(this)">Đoàn Kết, Xã Đoài Phương, Hà Nội</span>
+  </div>
+  <div class="examples">
+    <span>Try (pre-2025):</span>
+    <span class="chip" onclick="setExamplePre(this)">q1 hcm</span>
+    <span class="chip" onclick="setExamplePre(this)">p bình thạnh q bình thạnh</span>
+    <span class="chip" onclick="setExamplePre(this)">dong da ha noi</span>
+    <span class="chip" onclick="setExamplePre(this)">son ky tan phu</span>
+    <span class="chip" onclick="setExamplePre(this)">khanh hoa nha trang</span>
+    <span class="chip" onclick="setExamplePre(this)">can tho ninh kieu</span>
+  </div>
+
+  <div class="spinner" id="spinner"></div>
+
+  <!-- Results -->
+  <div id="results"></div>
+
+</main>
+
+<script>
+  const API = '';  // same origin
+
+  const MERGER_DATE = '2025-07-01';
+
+  // ── Health check ──────────────────────────────────────────────────────────
+  async function checkHealth() {
+    try {
+      const r = await fetch(`${API}/health`);
+      const d = await r.json();
+      document.getElementById('statusDot').className = 'status-dot ok';
+      const counts = d.counts_by_era || {};
+      const post = counts['post_merger'] || 0;
+      const pre  = counts['pre_merger']  || 0;
+      document.getElementById('statusLabel').textContent =
+        `${post.toLocaleString()} post + ${pre.toLocaleString()} pre`;
+    } catch {
+      document.getElementById('statusDot').className = 'status-dot err';
+      document.getElementById('statusLabel').textContent = 'API offline';
+    }
+  }
+  checkHealth();
+
+  // ── Date handling ─────────────────────────────────────────────────────────
+  function updateEraHint() {
+    const val = document.getElementById('asOfDate').value;
+    const hint = document.getElementById('eraHint');
+    if (!val || val >= MERGER_DATE) {
+      hint.textContent = '— post-merger structure (34 provinces, no districts)';
+    } else {
+      hint.textContent = '— pre-merger structure (63 provinces + districts)';
+    }
+  }
+  document.getElementById('asOfDate').addEventListener('change', updateEraHint);
+
+  function clearDate() {
+    document.getElementById('asOfDate').value = '';
+    updateEraHint();
+  }
+
+  // ── Example chips ─────────────────────────────────────────────────────────
+  function setExample(el) {
+    document.getElementById('addrInput').value = el.textContent;
+    clearDate();  // post-merger examples use today
+    doResolve();
+  }
+  function setExamplePre(el) {
+    document.getElementById('addrInput').value = el.textContent;
+    document.getElementById('asOfDate').value = '2025-06-30';
+    updateEraHint();
+    doResolve();
+  }
+
+  // ── Keyboard shortcut: Ctrl/Cmd+Enter ─────────────────────────────────────
+  document.getElementById('addrInput').addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') doResolve();
+  });
+
+  // ── Resolve ───────────────────────────────────────────────────────────────
+  async function doResolve() {
+    const input = document.getElementById('addrInput').value.trim();
+    if (!input) return;
+
+    const btn = document.getElementById('resolveBtn');
+    const spinner = document.getElementById('spinner');
+    btn.disabled = true;
+    spinner.classList.add('active');
+    document.getElementById('results').innerHTML = '';
+
+    const asOfDate = document.getElementById('asOfDate').value || null;
+
+    try {
+      const resp = await fetch(`${API}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address: input, as_of_date: asOfDate }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json();
+        throw new Error(err.detail || resp.statusText);
+      }
+      const data = await resp.json();
+      renderResults(data);
+    } catch (err) {
+      document.getElementById('results').innerHTML =
+        `<div class="error-msg">Error: ${err.message}</div>`;
+    } finally {
+      btn.disabled = false;
+      spinner.classList.remove('active');
+    }
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  function actionLabel(a) {
+    return { auto_accept: 'Auto Accept', review: 'Review', low_confidence: 'Low Confidence' }[a] ?? a;
+  }
+
+  function confClass(c) {
+    if (c >= 0.80) return '';
+    if (c >= 0.60) return 'med';
+    return 'low';
+  }
+
+  function unitCell(u, label) {
+    if (!u) return `<div class="addr-cell"><div class="cell-label">${label}</div><div class="cell-sub">—</div></div>`;
+    return `
+      <div class="addr-cell">
+        <div class="cell-label">${label}</div>
+        <div class="cell-value">${u.name}</div>
+        <div class="cell-sub">${u.full_name}</div>
+        <div class="cell-score">score ${u.score}</div>
+      </div>`;
+  }
+
+  function renderCandRow(c, rank) {
+    const prov = c.province ? c.province.name : '—';
+    const dist = c.district ? c.district.name : '—';
+    const ward = c.ward     ? c.ward.name     : '—';
+    const tags = c.reasons.map(r => `<span class="reason-tag">${r}</span>`).join('');
+    return `
+      <tr>
+        <td class="rank">#${rank}</td>
+        <td>${prov}</td>
+        <td>${dist}</td>
+        <td>${ward}</td>
+        <td class="score-val">${c.score.toFixed(1)}</td>
+        <td><div class="reasons">${tags}</div></td>
+      </tr>`;
+  }
+
+  function renderResults(data) {
+    const pct = Math.round(data.confidence * 100);
+    const top = data.top;
+
+    const normRow = `
+      <div class="norm-row">
+        <span>Normalized</span>
+        <span class="arrow">→</span>
+        <span class="norm-val">${escHtml(data.normalized)}</span>
+      </div>`;
+
+    const confBar = `
+      <div class="conf-row">
+        <span class="conf-label">Confidence</span>
+        <div class="conf-bar-wrap">
+          <div class="conf-bar ${confClass(data.confidence)}" style="width:${pct}%"></div>
+        </div>
+        <span class="conf-pct">${pct}%</span>
+        <span class="action-pill ${data.action}">${actionLabel(data.action)}</span>
+      </div>`;
+
+    const hasStreet = data.house_number || data.street_raw;
+    const houseCell = data.house_number
+      ? `<div class="addr-cell">
+           <div class="cell-label">House No.</div>
+           <div class="cell-value">${escHtml(data.house_number)}</div>
+         </div>`
+      : '';
+    const streetCell = data.street_raw
+      ? `<div class="addr-cell">
+           <div class="cell-label">Street (raw)</div>
+           <div class="cell-value" style="font-size:13px">${escHtml(data.street_raw)}</div>
+           <div class="cell-sub" style="font-size:10px;color:var(--fg3)">OSM lookup not yet loaded</div>
+         </div>`
+      : '';
+
+    const eraLabel = data.era === 'post_merger' ? 'Post-merger 2025' : 'Pre-merger';
+    const eraBadge = `<span class="era-badge ${data.era}">${eraLabel}</span>`;
+    const districtCol = data.era === 'post_merger'
+      ? ''   // no districts in post-merger
+      : unitCell(top?.district, 'District');
+
+    const topCard = top ? `
+      <div class="card">
+        <div class="card-header">
+          Top Result
+          ${eraBadge}
+          <span style="margin-left:auto;font-size:11px;color:var(--fg3);font-weight:400;text-transform:none">
+            score ${top.score.toFixed(1)}
+          </span>
+        </div>
+        <div class="card-body">
+          <div class="addr-grid${hasStreet ? ' with-street' : ''}">
+            ${houseCell}
+            ${streetCell}
+            ${unitCell(top.province, 'Province / City')}
+            ${districtCol}
+            ${unitCell(top.ward, 'Ward')}
+          </div>
+        </div>
+      </div>` : `<div class="empty-state">No candidates found</div>`;
+
+    const candRows = (data.candidates || []).map((c, i) => renderCandRow(c, i + 1)).join('');
+    const candTable = data.candidates?.length ? `
+      <div class="card">
+        <div class="card-header">All Candidates</div>
+        <div class="card-body" style="padding:0">
+          <table class="cand-table">
+            <thead><tr>
+              <th>#</th><th>Province</th><th>District</th><th>Ward</th>
+              <th>Score</th><th>Reasons</th>
+            </tr></thead>
+            <tbody>${candRows}</tbody>
+          </table>
+        </div>
+      </div>` : '';
+
+    const debug = `
+      <details>
+        <summary>Raw JSON response</summary>
+        <pre>${escHtml(JSON.stringify(data, null, 2))}</pre>
+      </details>`;
+
+    document.getElementById('results').innerHTML =
+      normRow + confBar + topCard + candTable + debug;
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+</script>
+</body>
+</html>

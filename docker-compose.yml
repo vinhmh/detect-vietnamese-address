@@ -1,0 +1,65 @@
+services:
+
+  # ── PostgreSQL 16 + pgvector ───────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: vn_address_pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-vn_address}
+      POSTGRES_USER:     ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-vn_address}"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  # ── One-shot ETL init container ────────────────────────────────────────────
+  # Runs migrations + full data pipeline, then exits (restart: "no").
+  # Re-run manually to refresh data:
+  #   docker compose run --rm etl
+  etl:
+    build: .
+    container_name: vn_address_etl
+    restart: "no"
+    command: ["bash", "etl/docker_entrypoint.sh"]
+    environment:
+      POSTGRES_HOST:     postgres
+      POSTGRES_PORT:     5432
+      POSTGRES_DB:       ${POSTGRES_DB:-vn_address}
+      POSTGRES_USER:     ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DATABASE_URL:      postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-vn_address}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - etl_data:/app/data     # persist downloaded JSON files across runs
+
+  # ── FastAPI address resolution server ─────────────────────────────────────
+  api:
+    build: .
+    container_name: vn_address_api
+    restart: unless-stopped
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-vn_address}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./api
+          target: /app/api
+
+volumes:
+  pgdata:
+  etl_data:
