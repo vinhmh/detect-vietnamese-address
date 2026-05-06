@@ -54,6 +54,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      etl:
+        condition: service_completed_successfully
     develop:
       watch:
         - action: sync+restart
