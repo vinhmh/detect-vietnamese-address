@@ -4,7 +4,7 @@ load_to_pg.py
 Load transformed AdminUnit rows into PostgreSQL admin_units table.
 
 Strategy:
-  - INSERT ... ON CONFLICT (gso_code) DO UPDATE
+  - INSERT ... ON CONFLICT (gso_code, valid_from) DO UPDATE
     → fully idempotent, safe to re-run on updated data
   - Two-pass load:
       Pass 1: insert all units with parent_id = NULL
@@ -51,18 +51,19 @@ def get_dsn() -> str:
 UPSERT_SQL = """
 INSERT INTO admin_units (
     gso_code, full_name, name, name_prefix, unit_type,
-    ascii_name, parent_id, valid_from, valid_to
+    ascii_name, parent_id, valid_from, valid_to, era
 )
 VALUES (
     %(gso_code)s, %(full_name)s, %(name)s, %(name_prefix)s, %(unit_type)s,
-    %(ascii_name)s, NULL, '2000-01-01', NULL
+    %(ascii_name)s, NULL, '2000-01-01', NULL, 'pre_merger'
 )
-ON CONFLICT (gso_code) DO UPDATE SET
+ON CONFLICT (gso_code, valid_from) DO UPDATE SET
     full_name   = EXCLUDED.full_name,
     name        = EXCLUDED.name,
     name_prefix = EXCLUDED.name_prefix,
     unit_type   = EXCLUDED.unit_type,
     ascii_name  = EXCLUDED.ascii_name,
+    era         = 'pre_merger',
     updated_at  = now()
 """
 
