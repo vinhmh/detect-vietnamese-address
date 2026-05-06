@@ -28,11 +28,18 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import date
+from typing import TYPE_CHECKING
 
 import psycopg
 from psycopg.rows import dict_row
 
+if TYPE_CHECKING:
+    from api.geocoder import GeocoderResult
+
 MERGER_DATE = date(2025, 7, 1)
+
+# Trigger geocoder fallback when heuristic confidence is below this threshold
+GEOCODER_CONFIDENCE_THRESHOLD = 0.65
 
 
 # ── Scoring weights ───────────────────────────────────────────────────────────
@@ -277,6 +284,9 @@ class ResolveResult:
     era:          str   # 'pre_merger' | 'post_merger'
     house_number: str | None = None   # e.g. "6", "3b", "12/4"
     street_raw:   str | None = None   # remaining tokens after admin units removed
+    geocoder_used:    bool = False
+    geocoder_source:  str | None = None   # "nominatim" | "google"
+    geocoder_address: str | None = None   # raw address string returned by geocoder
 
 
 # ── SQL validity helper ────────────────────────────────────────────────────────
@@ -736,37 +746,77 @@ def _resolve_single_era(
 
 
 PRE_MERGER_SNAPSHOT = date(2025, 6, 30)
+MIN_ERA_MARGIN = 0.05   # pre-merger must beat post-merger by this to win
+
+
+def _best_era(raw_input: str, conn: psycopg.Connection, as_of_date: date | None) -> ResolveResult:
+    """Run heuristic resolver, auto-detecting era when as_of_date is None."""
+    if as_of_date is not None:
+        return _resolve_single_era(raw_input, conn, as_of_date)
+
+    post = _resolve_single_era(raw_input, conn, date.today())
+    pre  = _resolve_single_era(raw_input, conn, PRE_MERGER_SNAPSHOT)
+    if pre.confidence > post.confidence + MIN_ERA_MARGIN:
+        return pre
+    return post
 
 
 def resolve(
     raw_input: str,
     conn: psycopg.Connection,
     as_of_date: date | None = None,
+    use_geocoder: bool = True,
 ) -> ResolveResult:
     """
     Resolve a raw Vietnamese address string.
 
-    If as_of_date is given, resolves strictly against that era.
+    Pipeline:
+      1. Run heuristic (pg_trgm) resolver — fast, free, local.
+      2. If the input looks like a place name (bệnh viện, trường…)
+         OR heuristic confidence < GEOCODER_CONFIDENCE_THRESHOLD:
+           → call external geocoder (Nominatim / Google Places)
+           → re-resolve the geocoder's address string
+           → keep the better of the two results.
+      3. Return result with geocoder metadata attached.
 
-    If as_of_date is None (default), uses auto-detection:
-      1. Try post-merger (today).
-      2. Also try pre-merger (2025-06-30).
-      3. Return whichever has higher confidence — unless post-merger wins
-         by at least MIN_ERA_MARGIN (avoid flip-flopping on ambiguous inputs).
-
-    This lets users enter old province names ("Bình Phước", "Bình Dương") and
-    still get correct results even after the 2025 restructuring.
+    Set use_geocoder=False to skip external calls entirely.
     """
-    if as_of_date is not None:
-        return _resolve_single_era(raw_input, conn, as_of_date)
+    # ── Step 1: heuristic resolve ─────────────────────────────────────────────
+    heuristic = _best_era(raw_input, conn, as_of_date)
 
-    # ── Auto-detect ───────────────────────────────────────────────────────────
-    MIN_ERA_MARGIN = 0.05   # pre-merger must beat post-merger by this much to win
+    if not use_geocoder:
+        return heuristic
 
-    post = _resolve_single_era(raw_input, conn, date.today())
-    pre  = _resolve_single_era(raw_input, conn, PRE_MERGER_SNAPSHOT)
+    # ── Step 2: decide whether to call geocoder ───────────────────────────────
+    from api.geocoder import geocode, is_place_name   # lazy import (avoids circular)
 
-    # Prefer post-merger unless pre-merger is meaningfully more confident
-    if pre.confidence > post.confidence + MIN_ERA_MARGIN:
-        return pre
-    return post
+    needs_geocoder = (
+        is_place_name(raw_input)
+        or heuristic.confidence < GEOCODER_CONFIDENCE_THRESHOLD
+    )
+
+    if not needs_geocoder:
+        return heuristic
+
+    # ── Step 3: geocode ───────────────────────────────────────────────────────
+    geo = geocode(raw_input)
+    if geo is None:
+        return heuristic   # geocoder failed — return what we have
+
+    # ── Step 4: re-resolve using geocoder's address string ────────────────────
+    geo_result = _best_era(geo.address, conn, as_of_date)
+
+    # Attach geocoder metadata to whichever result wins
+    def _attach(r: ResolveResult) -> ResolveResult:
+        r.geocoder_used    = True
+        r.geocoder_source  = geo.source
+        r.geocoder_address = geo.display_name
+        return r
+
+    # Keep the geocoder-derived result if it's meaningfully better,
+    # OR if the original was a low-confidence place-name lookup
+    if geo_result.confidence > heuristic.confidence + 0.05 or is_place_name(raw_input):
+        return _attach(geo_result)
+
+    # Geocoder didn't help — return heuristic but still note geocoder was tried
+    return _attach(heuristic)

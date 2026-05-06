@@ -73,7 +73,8 @@ app.add_middleware(
 
 class ResolveRequest(BaseModel):
     address: str
-    as_of_date: str | None = None  # ISO date string e.g. "2025-06-30" for pre-merger
+    as_of_date: str | None = None   # ISO date e.g. "2025-06-30" for pre-merger
+    use_geocoder: bool = True        # set False to skip Nominatim/Google lookup
 
 
 class UnitOut(BaseModel):
@@ -144,7 +145,7 @@ def resolve_address(req: ResolveRequest) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail="as_of_date must be ISO format YYYY-MM-DD")
 
     conn = get_conn()
-    result = resolve(req.address, conn, as_of_date=as_of)
+    result = resolve(req.address, conn, as_of_date=as_of, use_geocoder=req.use_geocoder)
 
     candidates_out = []
     for c in result.candidates:
@@ -162,10 +163,13 @@ def resolve_address(req: ResolveRequest) -> dict[str, Any]:
         "normalized":   result.normalized,
         "confidence":   result.confidence,
         "action":       result.action,
-        "era":          result.era,
-        "as_of_date":   (as_of or date.today()).isoformat(),
-        "house_number": result.house_number,
-        "street_raw":   result.street_raw,
+        "era":              result.era,
+        "as_of_date":       (as_of or date.today()).isoformat(),
+        "house_number":     result.house_number,
+        "street_raw":       result.street_raw,
+        "geocoder_used":    result.geocoder_used,
+        "geocoder_source":  result.geocoder_source,
+        "geocoder_address": result.geocoder_address,
         "top": CandidateOut(
             score=round(top.score, 3),
             reasons=top.reasons,
